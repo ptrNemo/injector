@@ -1,11 +1,11 @@
 #include "injector.h"
 
-InjectStatus injector::inject(const std::string_view& processName, const std::filesystem::path dllPath) {
-    if (std::filesystem::exists(dllPath))
-        return {false, InjectError::InvalidArgument, GetLastError()};
+injector::InjectStatus injector::inject(const std::string_view& processName, const std::filesystem::path dllPath) {
+    if (!std::filesystem::exists(dllPath))
+        return {false, InjectError::InvalidArgument, ERROR_FILE_NOT_FOUND};
 
     DWORD pid = getPID(processName);
-    if (pid == 0) return {false, InjectError::ProcessNotFound, GetLastError()};
+    if (pid == 0) return {false, InjectError::ProcessNotFound, ERROR_PROC_NOT_FOUND};
 
     HANDLE hProc = OpenProcess(
         PROCESS_CREATE_THREAD |
@@ -36,7 +36,7 @@ InjectStatus injector::inject(const std::string_view& processName, const std::fi
         hProc,
         remoteBuf,
         dllPath.c_str(),
-        strlen(reinterpret_cast<const char *>(dllPath.c_str())) + 1,
+        dllPath.string().size() + 1,
         nullptr
     );
 
@@ -66,9 +66,9 @@ InjectStatus injector::inject(const std::string_view& processName, const std::fi
     return {true, InjectError::None, ERROR_SUCCESS};
 }
 
-InjectStatus injector::eject(const std::string_view& processName, const std::string& dllName) {
+injector::InjectStatus injector::eject(const std::string_view& processName, const std::string& dllName) {
     DWORD pid = getPID(processName);
-    if (pid == 0) return {false, InjectError::ProcessNotFound, GetLastError()};
+    if (pid == 0) return {false, InjectError::ProcessNotFound, ERROR_PROC_NOT_FOUND};
 
     HANDLE hProc = OpenProcess(
         PROCESS_CREATE_THREAD |
@@ -85,7 +85,7 @@ InjectStatus injector::eject(const std::string_view& processName, const std::str
     HMODULE hModule = getRMH(pid, dllName);
     if (!hModule) {
         CloseHandle(hProc);
-        return {false, InjectError::ModuleNotLoaded, GetLastError()};
+        return {false, InjectError::ModuleNotLoaded, ERROR_DLL_NOT_FOUND};
     }
 
     HMODULE hKernel32 = GetModuleHandleA("Kernel32");
@@ -119,16 +119,16 @@ InjectStatus injector::eject(const std::string_view& processName, const std::str
     CloseHandle(hThread);
 
     if (getRMH(pid, dllName)) //check if module has been removed
-        return {false, InjectError::ModuleNotEjected, ERROR};
+        return {false, InjectError::ModuleNotEjected, ERROR_DLL_NOT_FOUND};
 
     CloseHandle(hProc);
 
     return {true, InjectError::None, ERROR_SUCCESS};
 }
 
-InjectStatus injector::callDllFunction(const std::string_view& processName, const std::string& dllName, const std::string& functionName) {
+injector::InjectStatus injector::callDllFunction(const std::string_view& processName, const std::string& dllName, const std::string& functionName) {
     DWORD pid = getPID(processName);
-    if (pid == 0) return {false, InjectError::ProcessNotFound, GetLastError()};
+    if (pid == 0) return {false, InjectError::ProcessNotFound, ERROR_PROC_NOT_FOUND};
 
     HMODULE hLocalDll = LoadLibraryA(dllName.c_str());
     if (!hLocalDll)
@@ -160,7 +160,7 @@ InjectStatus injector::callDllFunction(const std::string_view& processName, cons
     if (!hRemoteModule) {
         FreeLibrary(hLocalDll);
         CloseHandle(hProc);
-        return {false, InjectError::ModuleNotLoaded, GetLastError()};
+        return {false, InjectError::ModuleNotLoaded, ERROR_DLL_NOT_FOUND};
     }
 
     auto pRemoteFnThread = reinterpret_cast<LPTHREAD_START_ROUTINE>(reinterpret_cast<std::uintptr_t>(hRemoteModule) + fnOffset);
@@ -206,15 +206,15 @@ HMODULE injector::getRMH(DWORD pid, const std::string& moduleBaseName) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
     if (snap == INVALID_HANDLE_VALUE) return nullptr;
 
-    MODULEENTRY32W me{};
+    MODULEENTRY32 me{};
     me.dwSize = sizeof(me);
-    if (Module32FirstW(snap, &me)) {
+    if (Module32First(snap, &me)) {
         do {
-            if (_wcsicmp(me.szModule, reinterpret_cast<const wchar_t *>(moduleBaseName.c_str())) == 0) {
+            if (!_stricmp(me.szModule, moduleBaseName.c_str())) {
                 hModule = me.hModule;
                 break;
             }
-        } while (Module32NextW(snap, &me));
+        } while (Module32Next(snap, &me));
     }
     CloseHandle(snap);
     return hModule;

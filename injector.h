@@ -5,25 +5,27 @@
 #include <windows.h>
 #include <tlhelp32.h>
 
-enum class InjectError {
-    None,
-    InvalidArgument,
-    ProcessNotFound,
-    OpenProcessFailed,
-    MemoryAllocationFailed,
-    ThreadCreationFailed,
-    ModuleNotLoaded,
-    ModuleNotEjected,
-    FunctionNotFound
-};
-
-struct InjectStatus {
-    bool success;
-    InjectError error;
-    DWORD nativeError;
-};
+#define ERROR_DLL_FOUND 1169
 
 namespace injector {
+    enum class InjectError {
+        None,
+        InvalidArgument,
+        ProcessNotFound,
+        OpenProcessFailed,
+        MemoryAllocationFailed,
+        ThreadCreationFailed,
+        ModuleNotLoaded,
+        ModuleNotEjected,
+        FunctionNotFound
+    };
+
+    struct InjectStatus {
+        bool success;
+        InjectError error;
+        DWORD nativeError;
+    };
+
     /**
     * Inject into process the specified dll creating a thread
     *
