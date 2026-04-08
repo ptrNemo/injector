@@ -1,18 +1,11 @@
 #include "injector.h"
 
-/**
- * Inject into process the specified dll creating a thread
- *
- * @param processName Target process name
- * @param dllPath Dll absolute path
- * @return True if successful injection, false if fails
- */
-bool injector::inject(const std::string_view& processName, const std::filesystem::path dllPath) {
+InjectStatus injector::inject(const std::string_view& processName, const std::filesystem::path dllPath) {
     if (std::filesystem::exists(dllPath))
-        return false;
+        return {false, InjectError::InvalidArgument, GetLastError()};
 
     DWORD pid = getPID(processName);
-    if (pid == 0) return false;
+    if (pid == 0) return {false, InjectError::ProcessNotFound, GetLastError()};
 
     HANDLE hProc = OpenProcess(
         PROCESS_CREATE_THREAD |
@@ -24,7 +17,7 @@ bool injector::inject(const std::string_view& processName, const std::filesystem
         pid
     );
 
-    if (!hProc) return false;
+    if (!hProc) return {false, InjectError::OpenProcessFailed, GetLastError()};
 
     void* remoteBuf = VirtualAllocEx(
         hProc,
@@ -36,7 +29,7 @@ bool injector::inject(const std::string_view& processName, const std::filesystem
 
     if (!remoteBuf) {
         CloseHandle(hProc);
-        return false;
+        return {false, InjectError::MemoryAllocationFailed, GetLastError()};
     }
 
     WriteProcessMemory(
@@ -61,7 +54,7 @@ bool injector::inject(const std::string_view& processName, const std::filesystem
         VirtualFreeEx(hProc, remoteBuf, 0, MEM_RELEASE);
         CloseHandle(hProc);
 
-        return false;
+        return {false, InjectError::ThreadCreationFailed, GetLastError()};
     }
 
     WaitForSingleObject(hThread, INFINITE);
@@ -70,19 +63,12 @@ bool injector::inject(const std::string_view& processName, const std::filesystem
     VirtualFreeEx(hProc, remoteBuf, 0, MEM_RELEASE);
     CloseHandle(hProc);
 
-    return true;
+    return {true, InjectError::None, ERROR_SUCCESS};
 }
 
-/**
- * Ejects from target the dll
- *
- * @param processName Target process name
- * @param dllName Dll name
- * @return True if successful ejection, false if fails
- */
-bool injector::eject(const std::string_view& processName, const std::string& dllName) {
+InjectStatus injector::eject(const std::string_view& processName, const std::string& dllName) {
     DWORD pid = getPID(processName);
-    if (pid == 0) return false;
+    if (pid == 0) return {false, InjectError::ProcessNotFound, GetLastError()};
 
     HANDLE hProc = OpenProcess(
         PROCESS_CREATE_THREAD |
@@ -94,24 +80,24 @@ bool injector::eject(const std::string_view& processName, const std::string& dll
         pid
     );
 
-    if (!hProc) return false;
+    if (!hProc) return {false, InjectError::OpenProcessFailed, GetLastError()};
 
     HMODULE hModule = getRMH(pid, dllName);
     if (!hModule) {
         CloseHandle(hProc);
-        return false;
+        return {false, InjectError::ModuleNotLoaded, GetLastError()};
     }
 
     HMODULE hKernel32 = GetModuleHandleA("Kernel32");
     if (!hKernel32) {
         CloseHandle(hProc);
-        return false;
+        return {false, InjectError::ModuleNotLoaded, GetLastError()};
     }
 
     auto freeLibraryThread = reinterpret_cast<PTHREAD_START_ROUTINE>(GetProcAddress(hKernel32, "FreeLibrary"));
     if (!freeLibraryThread) {
         CloseHandle(hProc);
-        return false;
+        return {false, InjectError::FunctionNotFound, GetLastError()};
     }
 
     HANDLE hThread = CreateRemoteThread(
@@ -125,7 +111,7 @@ bool injector::eject(const std::string_view& processName, const std::string& dll
 
     if (!hThread) {
         CloseHandle(hProc);
-        return false;
+        return {false, InjectError::ThreadCreationFailed, GetLastError()};
     }
 
     WaitForSingleObject(hThread, INFINITE);
@@ -133,53 +119,28 @@ bool injector::eject(const std::string_view& processName, const std::string& dll
     CloseHandle(hThread);
 
     if (getRMH(pid, dllName)) //check if module has been removed
-        return false;
+        return {false, InjectError::ModuleNotEjected, ERROR};
 
     CloseHandle(hProc);
 
-    return true;
+    return {true, InjectError::None, ERROR_SUCCESS};
 }
 
-/**
- * Calling exported function from process
- *
- * @param processName Target process name
- * @param dllName Loaded dll module name
- * @param functionName Function name
- * @return True if successful call, false if fails
- */
-bool injector::callDllFunction(const std::string_view& processName, const std::string& dllName, const std::string& functionName) {
-    /* TODO
-     * get process id
-     * open process
-     * get local module handle for the same dll
-     * get exported function address locally
-     * compute function offset from local module base
-     * get remote module handle for the dll in target process
-     * compute remote function address
-     * create remote thread to call the remote function
-     * wait for thread completion
-     * check exit code
-     * close handles
-    */
+InjectStatus injector::callDllFunction(const std::string_view& processName, const std::string& dllName, const std::string& functionName) {
     DWORD pid = getPID(processName);
-    if (pid == 0) return false;
+    if (pid == 0) return {false, InjectError::ProcessNotFound, GetLastError()};
 
     HMODULE hLocalDll = LoadLibraryA(dllName.c_str());
     if (!hLocalDll)
-        return false;
+        return {false, InjectError::ModuleNotLoaded, GetLastError()};
 
     FARPROC localFnAddress = GetProcAddress(hLocalDll, functionName.c_str());
     if (!localFnAddress) {
         FreeLibrary(hLocalDll);
-        return false;
+        return {false, InjectError::FunctionNotFound, GetLastError()};
     }
 
     std::ptrdiff_t fnOffset = reinterpret_cast<std::uintptr_t>(localFnAddress) - reinterpret_cast<std::uintptr_t>(hLocalDll);
-    if (!fnOffset) {
-        FreeLibrary(hLocalDll);
-        return false;
-    }
 
     HANDLE hProc = OpenProcess(
     PROCESS_CREATE_THREAD |
@@ -192,14 +153,14 @@ bool injector::callDllFunction(const std::string_view& processName, const std::s
     );
     if (!hProc) {
         FreeLibrary(hLocalDll);
-        return false;
+        return {false, InjectError::OpenProcessFailed, GetLastError()};
     }
 
     HMODULE hRemoteModule = getRMH(pid, dllName);
     if (!hRemoteModule) {
         FreeLibrary(hLocalDll);
         CloseHandle(hProc);
-        return false;
+        return {false, InjectError::ModuleNotLoaded, GetLastError()};
     }
 
     auto pRemoteFnThread = reinterpret_cast<LPTHREAD_START_ROUTINE>(reinterpret_cast<std::uintptr_t>(hRemoteModule) + fnOffset);
@@ -208,7 +169,7 @@ bool injector::callDllFunction(const std::string_view& processName, const std::s
     if (!hThread) {
         FreeLibrary(hLocalDll);
         CloseHandle(hProc);
-        return false;
+        return {false, InjectError::ThreadCreationFailed, GetLastError()};
     }
 
     WaitForSingleObject(hThread, INFINITE);
@@ -217,15 +178,9 @@ bool injector::callDllFunction(const std::string_view& processName, const std::s
     FreeLibrary(hLocalDll);
     CloseHandle(hProc);
 
-    return true;
+    return {true, InjectError::None, ERROR_SUCCESS};
 }
 
-/**
- * For a given processName returns the pid
- *
- * @param processName Target process name
- * @return Process pid if process found or 0 if fails
- */
 DWORD injector::getPID(const std::string_view& processName) {
     DWORD procId = 0;
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -246,13 +201,6 @@ DWORD injector::getPID(const std::string_view& processName) {
     return procId;
 }
 
-/**
- * For a given process and a given module name, returns the handle to that module
- *
- * @param pid Process target id
- * @param moduleBaseName Loaded dll name
- * @return Handle to the found module
- */
 HMODULE injector::getRMH(DWORD pid, const std::string& moduleBaseName) {
     HMODULE hModule = nullptr;
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
