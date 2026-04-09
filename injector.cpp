@@ -32,13 +32,17 @@ injector::InjectStatus injector::inject(const std::string_view& processName, con
         return {false, InjectError::MemoryAllocationFailed, GetLastError()};
     }
 
-    WriteProcessMemory(
+    if (!WriteProcessMemory(
         hProc,
         remoteBuf,
-        dllPath.c_str(),
+        dllPath.string().c_str(),
         dllPath.string().size() + 1,
         nullptr
-    );
+    )) {
+        VirtualFreeEx(hProc, remoteBuf, 0, MEM_RELEASE);
+        CloseHandle(hProc);
+        return {false, InjectError::MemoryWriteFailed, GetLastError()};
+    }
 
     HANDLE hThread = CreateRemoteThread(
         hProc,
@@ -119,7 +123,7 @@ injector::InjectStatus injector::eject(const std::string_view& processName, cons
     CloseHandle(hThread);
 
     if (getRMH(pid, dllName)) //check if module has been removed
-        return {false, InjectError::ModuleNotEjected, ERROR_DLL_NOT_FOUND};
+        return {false, InjectError::ModuleNotEjected, ERROR_DLL_FOUND};
 
     CloseHandle(hProc);
 

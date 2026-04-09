@@ -17,7 +17,8 @@ namespace injector {
         ThreadCreationFailed,
         ModuleNotLoaded,
         ModuleNotEjected,
-        FunctionNotFound
+        FunctionNotFound,
+        MemoryWriteFailed
     };
 
     struct InjectStatus {
