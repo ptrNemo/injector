@@ -178,6 +178,14 @@ injector::InjectStatus injector::callDllFunction(const std::string_view& process
 
     WaitForSingleObject(hThread, INFINITE);
 
+    DWORD functionResult = 0;
+    if (!GetExitCodeThread(hThread, &functionResult)) {
+        CloseHandle(hThread);
+        FreeLibrary(hLocalDll);
+        CloseHandle(hProc);
+        return {false, InjectError::ExportedFunctionError, functionResult};
+    }
+
     CloseHandle(hThread);
     FreeLibrary(hLocalDll);
     CloseHandle(hProc);

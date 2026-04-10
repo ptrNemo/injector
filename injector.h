@@ -18,7 +18,8 @@ namespace injector {
         ModuleNotLoaded,
         ModuleNotEjected,
         FunctionNotFound,
-        MemoryWriteFailed
+        MemoryWriteFailed,
+        ExportedFunctionError
     };
 
     struct InjectStatus {
